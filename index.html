@@ -70,6 +70,10 @@
   .pdia .txt .h{color:var(--verde);font-weight:700;margin-right:6px}
   .pdia .txt p{margin:4px 0 0;color:var(--gris);font-size:14px;line-height:1.4}
   .pin{background:var(--verde);color:#fff;font-weight:700;font-size:13px;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+  .avisoGPS{position:fixed;z-index:1100;left:10px;right:10px;top:calc(env(safe-area-inset-top) + 70px);background:#fff;border-radius:16px;box-shadow:0 8px 30px rgba(0,0,0,.3);padding:14px;border:2px solid var(--verde)}
+  .avisoGPS b{font-size:17px}
+  .avisoGPS .acciones a,.avisoGPS .acciones button{min-width:0}
+  .gpsest{font-size:12px;color:var(--gris);margin:2px 0 6px}
   .yo{width:18px;height:18px;border-radius:50%;background:#1a73e8;border:3px solid #fff;box-shadow:0 0 0 2px rgba(26,115,232,.35)}
 </style>
 </head>
@@ -84,6 +88,7 @@
   <button class="boton-redondo" id="btnYo" title="Cerca de mí" aria-label="Cerca de mí">📍</button>
 </div>
 
+<div class="avisoGPS" id="avisoGPS" style="display:none"></div>
 <div class="panel" id="panel">
   <div class="asa" id="asa"></div>
   <div class="pestanas">
@@ -183,7 +188,7 @@ function irA(pos, zoom){
   centro = pos;
   mapa.setView([pos.lat, pos.lon], zoom || 14);
   vista = "lista"; fichaActual = null;
-  if(diaVista){ diaVista = null; capaDia.clearLayers(); $panel.style.maxHeight = ""; }
+  if(diaVista){ diaVista = null; capaDia.clearLayers(); $panel.style.maxHeight = ""; if(vigilancia != null){ navigator.geolocation.clearWatch(vigilancia); vigilancia = null; } cerrarAvisoGps(); }
   cargarSitios(pos);
   tiempoCache = null;
   if(pestana === "tiempo") pintarTiempo();
@@ -337,6 +342,7 @@ async function abrirDia(datos){
     centro = {lat: pts[0][0], lon: pts[0][1]}; tiempoCache = null;
   } else if(datos.x){ buscarLugar(datos.x).then(() => { vista = "dia"; pintarDia(); }); }
   pintarDia();
+  iniciarSeguimiento();
   try{ await fotosWiki("es", datos.p); }catch(_){}
   try{ await fotosWiki("en", datos.p); }catch(_){}
   if(vista === "dia" && pestana === "sitios") pintarDia();
@@ -344,11 +350,11 @@ async function abrirDia(datos){
 function pintarDia(){
   const d = diaVista;
   $contenido.innerHTML = `<div class="diacab"><h2>${esc(d.d || "Itinerario")}</h2>
-    <div class="desc">${esc([d.t, d.x].filter(Boolean).join(" · "))}</div></div>` +
+    <div class="desc">${esc([d.t, d.x].filter(Boolean).join(" · "))}</div><div class="gpsest" id="gpsest">${esc(gpsEstado)}</div></div>` +
     d.p.map((p, i) => `
     <div class="pdia" data-i="${i}">
       <div class="img"><span class="num">${i+1}</span>${p.foto ? `<img src="${esc(p.foto)}" alt="" loading="lazy">` : (/comida|almuerzo|cena|desayuno|restaurante|izakaya|mercado/i.test(p.nombre) ? "🍽️" : /tren|traslado|estación|aeropuerto|shinkansen|vuelo|bus/i.test(p.nombre) ? "🚆" : "🏛️")}</div>
-      <div class="txt">${p.hora ? `<span class="h">${esc(p.hora)}</span>` : ""}<b>${esc(p.nombre)}</b>
+      <div class="txt">${p.hora ? `<span class="h">${esc(p.hora)}</span>` : ""}<b>${esc(p.nombre)}</b>${p.visitado || visitadoLocal(p.id) ? ' <span class="etq" style="background:#e7f2ef;color:#0f5c4d">✅ Visitado</span>' : ""}
       ${p.nota ? `<p>${esc(p.nota)}</p>` : ""}</div>
     </div>`).join("") +
     `<div class="nota">Fotos: Wikipedia / Wikimedia Commons. Toca una parada para ver su ficha.</div>`;
@@ -399,6 +405,50 @@ function dibujarTiempo(d){
     <div class="nota">Previsión para el punto del mapa · Fuente: Open-Meteo. Hora local del destino.</div>`;
 }
 
+/* ---------- aviso por GPS al llegar a una parada del día ---------- */
+const PLANIFICADOR = "https://claude.ai/artifact/Qbgh7byxhy38dJQYAEBNZj";
+const RADIO_AVISO = 100;           // metros
+let vigilancia = null, gpsEstado = "", marcaGps = null, descartados = new Set(), avisoActual = null;
+function leerVisitados(){ try{ return JSON.parse(localStorage.getItem("mgv_visitados") || "[]"); }catch(_){ return []; } }
+function visitadoLocal(id){ return !!id && leerVisitados().includes(id); }
+function guardarVisitadoLocal(id){ try{ const l = leerVisitados(); if(!l.includes(id)){ l.push(id); localStorage.setItem("mgv_visitados", JSON.stringify(l.slice(-500))); } }catch(_){} }
+function ponerEstadoGps(t){ gpsEstado = t; const el = document.getElementById("gpsest"); if(el) el.textContent = t; }
+function iniciarSeguimiento(){
+  if(vigilancia != null || !navigator.geolocation) { if(!navigator.geolocation) ponerEstadoGps("Este navegador no permite usar el GPS."); return; }
+  if(!diaVista || !diaVista.p.some(p => p.id && p.lat != null)) return;
+  ponerEstadoGps("📡 Activando GPS…");
+  vigilancia = navigator.geolocation.watchPosition(pos => {
+    const yo = {lat: pos.coords.latitude, lon: pos.coords.longitude}, prec = pos.coords.accuracy || 0;
+    if(marcaGps) marcaGps.setLatLng([yo.lat, yo.lon]);
+    else marcaGps = L.marker([yo.lat, yo.lon], {icon: L.divIcon({className:"", html:'<div class="yo"></div>', iconSize:[18,18]})}).addTo(mapa);
+    if(prec > 150){ ponerEstadoGps(`📡 GPS con poca precisión (${Math.round(prec)} m): esperando mejor señal…`); return; }
+    ponerEstadoGps(`📡 GPS activo: te avisaré al llegar a cada parada (a menos de ${RADIO_AVISO} m). Mantén esta pantalla abierta.`);
+    comprobarCercania(yo);
+  }, err => {
+    ponerEstadoGps(err.code === 1 ? "📡 Permiso de ubicación denegado: actívalo en los ajustes del navegador para recibir avisos." : "📡 Sin señal GPS por ahora.");
+    if(err.code === 1){ navigator.geolocation.clearWatch(vigilancia); vigilancia = null; }
+  }, {enableHighAccuracy: true, maximumAge: 15000, timeout: 30000});
+}
+function comprobarCercania(yo){
+  if(!diaVista || avisoActual) return;
+  const cand = diaVista.p.filter(p => p.id && p.lat != null && !p.visitado && !visitadoLocal(p.id) && !descartados.has(p.id))
+    .map(p => ({p, m: distancia(yo, p) * 1000})).filter(x => x.m <= RADIO_AVISO).sort((a,b) => a.m - b.m)[0];
+  if(cand) mostrarAvisoGps(cand.p, cand.m);
+}
+function mostrarAvisoGps(p, m){
+  avisoActual = p.id;
+  const el = document.getElementById("avisoGPS");
+  el.innerHTML = `<div style="font-size:13px;color:var(--gris)">📍 Estás a ${Math.round(m)} m de</div><b>${esc(p.nombre)}</b>
+    <div class="acciones" style="margin:10px 0 0"><button class="secundario" id="gpsNo">Ahora no</button>
+    <a class="primario" id="gpsSi" href="${PLANIFICADOR}#visitar-${encodeURIComponent(p.id)}" target="_blank" rel="noopener">✅ Marcar visitado</a></div>
+    <div class="nota" style="margin-top:6px">Se abrirá el Planificador para confirmarlo y que lo vea toda la familia.</div>`;
+  el.style.display = "block";
+  try{ navigator.vibrate && navigator.vibrate([200, 100, 200]); }catch(_){}
+  document.getElementById("gpsNo").onclick = () => { descartados.add(p.id); cerrarAvisoGps(); };
+  document.getElementById("gpsSi").onclick = () => { guardarVisitadoLocal(p.id); p.visitado = true; setTimeout(() => { cerrarAvisoGps(); if(vista === "dia") pintarDia(); }, 300); };
+}
+function cerrarAvisoGps(){ document.getElementById("avisoGPS").style.display = "none"; avisoActual = null; }
+
 /* ---------- arranque: parámetros de enlace ---------- */
 (function inicio(){
   const p = new URLSearchParams(location.search);
@@ -408,7 +458,8 @@ function dibujarTiempo(d){
   if(dia && Array.isArray(dia.p)){
     const num = v => (v === null || v === "" || !isFinite(+v)) ? null : +v;
     abrirDia({d: String(dia.d||""), t: String(dia.t||""), x: String(dia.x||""),
-      p: dia.p.slice(0, 15).map(a => ({hora:String(a[0]||""), nombre:String(a[1]||"Parada"), nota:String(a[2]||""), lat:num(a[3]), lon:num(a[4]), wiki:String(a[5]||"")}))});
+      p: dia.p.slice(0, 15).map(a => ({hora:String(a[0]||""), nombre:String(a[1]||"Parada"), nota:String(a[2]||""), lat:num(a[3]), lon:num(a[4]), wiki:String(a[5]||""),
+        id: /^[A-Za-z0-9]{1,40}$/.test(String(a[6]||"")) ? String(a[6]) : "", visitado: !!a[7]}))});
   } else if(!isNaN(lat) && !isNaN(lon)){
     irA({lat, lon}, 15);
     if(t){ setTimeout(() => mostrarFicha(t, "es", {lat, lon}), 300); }
