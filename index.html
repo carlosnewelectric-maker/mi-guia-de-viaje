@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f5c4d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Mi Guía">
+<title>Mi Guía de Viaje</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root{
+    --verde:#0f5c4d; --verde2:#e7f2ef; --tinta:#1d2421; --gris:#5f6b66; --linea:#dde3e0;
+    --fondo:#ffffff; --sombra:0 6px 24px rgba(0,0,0,.18);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--tinta);background:#f4f6f5}
+  #mapa{position:fixed;inset:0;z-index:1}
+  /* Barra superior */
+  .barra{position:fixed;z-index:1000;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top) + 10px) 10px 10px;display:flex;gap:8px;pointer-events:none}
+  .barra form{flex:1;display:flex;pointer-events:auto;background:var(--fondo);border-radius:14px;box-shadow:var(--sombra);overflow:hidden}
+  .barra input{flex:1;border:0;padding:13px 14px;font-size:16px;outline:none;min-width:0}
+  .barra button{border:0;background:var(--verde);color:#fff;padding:0 16px;font-size:15px;font-weight:600}
+  .boton-redondo{pointer-events:auto;width:48px;height:48px;border-radius:14px;border:0;background:var(--fondo);box-shadow:var(--sombra);font-size:22px;display:flex;align-items:center;justify-content:center}
+  /* Panel inferior */
+  .panel{position:fixed;z-index:1000;left:0;right:0;bottom:0;background:var(--fondo);border-radius:20px 20px 0 0;box-shadow:var(--sombra);
+         max-height:62vh;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom);transition:max-height .25s}
+  .panel.min{max-height:118px}
+  .asa{width:44px;height:5px;border-radius:3px;background:#c9d1cd;margin:8px auto 4px;flex:none}
+  .pestanas{display:flex;gap:6px;padding:4px 12px 8px;flex:none}
+  .pestanas button{flex:1;border:1px solid var(--linea);background:#fff;border-radius:10px;padding:9px 4px;font-size:14px;font-weight:600;color:var(--gris)}
+  .pestanas button.activa{background:var(--verde);border-color:var(--verde);color:#fff}
+  .contenido{overflow-y:auto;padding:0 14px 14px;-webkit-overflow-scrolling:touch}
+  .estado{color:var(--gris);font-size:14px;padding:6px 2px}
+  /* Lista de sitios */
+  .sitio{display:flex;gap:12px;align-items:center;padding:10px 4px;border-bottom:1px solid var(--linea);cursor:pointer}
+  .sitio img,.sitio .sinfoto{width:58px;height:58px;border-radius:10px;object-fit:cover;flex:none;background:var(--verde2)}
+  .sitio .sinfoto{display:flex;align-items:center;justify-content:center;font-size:24px}
+  .sitio b{display:block;font-size:15px}
+  .sitio small{color:var(--gris);font-size:13px}
+  .etq{display:inline-block;font-size:11px;font-weight:700;background:#fff3d6;color:#7a5500;border-radius:5px;padding:1px 5px;margin-left:4px;vertical-align:middle}
+  /* Ficha */
+  .ficha h2{margin:4px 0 2px;font-size:21px}
+  .ficha .desc{color:var(--gris);margin:0 0 10px;font-size:14px}
+  .ficha img.foto{width:100%;max-height:240px;object-fit:cover;border-radius:14px;background:var(--verde2)}
+  .ficha p{line-height:1.5;font-size:15px}
+  .acciones{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+  .acciones a,.acciones button{flex:1;min-width:130px;text-align:center;text-decoration:none;border:0;border-radius:12px;padding:12px;font-weight:600;font-size:14px}
+  .primario{background:var(--verde);color:#fff}
+  .secundario{background:var(--verde2);color:var(--verde)}
+  .volver{border:0;background:none;color:var(--verde);font-weight:600;font-size:15px;padding:6px 0}
+  /* Tiempo */
+  .ahora{display:flex;align-items:center;gap:14px;padding:6px 0 12px}
+  .ahora .ico{font-size:46px}
+  .ahora .temp{font-size:34px;font-weight:700}
+  .dia{display:grid;grid-template-columns:92px 34px 1fr auto;align-items:center;gap:8px;padding:9px 2px;border-bottom:1px solid var(--linea);font-size:15px}
+  .dia .ll{color:#2b6cb0;font-size:13px}
+  .nota{font-size:12px;color:var(--gris);margin-top:10px}
+  .leaflet-popup-content{margin:10px 12px;font-size:14px}
+  /* Vista de día con fotos */
+  .diacab h2{margin:2px 0;font-size:20px}
+  .diacab .desc{color:var(--gris);font-size:14px;margin-bottom:8px}
+  .pdia{border-radius:16px;overflow:hidden;border:1px solid var(--linea);margin:10px 0;cursor:pointer;background:#fff}
+  .pdia .img{position:relative;height:170px;background:var(--verde2);display:flex;align-items:center;justify-content:center;font-size:44px}
+  .pdia .img img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .pdia .num{position:absolute;left:10px;top:10px;z-index:2;background:var(--verde);color:#fff;font-weight:700;border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;border:2px solid #fff;font-size:15px}
+  .pdia .txt{padding:10px 12px}
+  .pdia .txt b{font-size:16px}
+  .pdia .txt .h{color:var(--verde);font-weight:700;margin-right:6px}
+  .pdia .txt p{margin:4px 0 0;color:var(--gris);font-size:14px;line-height:1.4}
+  .pin{background:var(--verde);color:#fff;font-weight:700;font-size:13px;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+  .yo{width:18px;height:18px;border-radius:50%;background:#1a73e8;border:3px solid #fff;box-shadow:0 0 0 2px rgba(26,115,232,.35)}
+</style>
+</head>
+<body>
+<div id="mapa"></div>
+
+<div class="barra">
+  <form id="buscador" autocomplete="off">
+    <input id="q" type="search" placeholder="Buscar ciudad o lugar…" enterkeyhint="search">
+    <button type="submit">Ir</button>
+  </form>
+  <button class="boton-redondo" id="btnYo" title="Cerca de mí" aria-label="Cerca de mí">📍</button>
+</div>
+
+<div class="panel" id="panel">
+  <div class="asa" id="asa"></div>
+  <div class="pestanas">
+    <button data-p="sitios" class="activa">🏛️ Sitios</button>
+    <button data-p="tiempo">⛅ Tiempo</button>
+  </div>
+  <div class="contenido" id="contenido"><div class="estado">Pulsa 📍 para ver qué hay cerca de ti, o busca un destino.</div></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+"use strict";
+/* ===== Mi Guía de Viaje — Guía (mapa, sitios, fichas, tiempo) =====
+   Fuentes gratuitas: OpenStreetMap (mapa y buscador), Wikipedia (sitios y fichas), Open-Meteo (tiempo).
+   Enlaces admitidos:  ?lat=35.01&lon=135.76   ?q=Kioto   ?t=Kinkaku-ji (abre la ficha)            */
+
+const RADIO = 10000;           // metros alrededor del punto para buscar sitios
+const MAX_SITIOS = 50;
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+const mapa = L.map("mapa", {zoomControl:false}).setView([40.4168, -3.7038], 5);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "© OpenStreetMap"
+}).addTo(mapa);
+const capaSitios = L.layerGroup().addTo(mapa);
+let marcaYo = null, centro = null, sitios = [], pestana = "sitios", vista = "lista", fichaActual = null;
+
+const $contenido = document.getElementById("contenido");
+const $panel = document.getElementById("panel");
+
+/* ---------- utilidades ---------- */
+async function getJSON(url){
+  const r = await fetch(url);
+  if(!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+function distancia(a, b){ // km
+  const R = 6371, rad = x => x*Math.PI/180;
+  const dLat = rad(b.lat-a.lat), dLon = rad(b.lon-a.lon);
+  const h = Math.sin(dLat/2)**2 + Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(h));
+}
+const fmtDist = km => km < 1 ? Math.round(km*1000) + " m" : km.toFixed(1).replace(".", ",") + " km";
+function estado(txt){ $contenido.innerHTML = `<div class="estado">${esc(txt)}</div>`; }
+function abrirPanel(){ $panel.classList.remove("min"); }
+
+/* ---------- pestañas y panel ---------- */
+document.querySelectorAll(".pestanas button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".pestanas button").forEach(x => x.classList.toggle("activa", x === b));
+  pestana = b.dataset.p; abrirPanel(); pintar();
+});
+document.getElementById("asa").onclick = () => $panel.classList.toggle("min");
+
+function pintar(){
+  if(pestana === "tiempo") return pintarTiempo();
+  if(vista === "dia" && diaVista) return pintarDia();
+  if(vista === "ficha" && fichaActual) return pintarFicha(fichaActual);
+  pintarLista();
+}
+
+/* ---------- ubicación ---------- */
+document.getElementById("btnYo").onclick = () => {
+  if(!navigator.geolocation){ estado("Este navegador no permite obtener la ubicación."); return; }
+  estado("Buscando tu ubicación…"); abrirPanel();
+  navigator.geolocation.getCurrentPosition(p => {
+    const pos = {lat:p.coords.latitude, lon:p.coords.longitude};
+    if(marcaYo) marcaYo.remove();
+    marcaYo = L.marker([pos.lat, pos.lon], {icon: L.divIcon({className:"", html:'<div class="yo"></div>', iconSize:[18,18]})}).addTo(mapa);
+    irA(pos, 14);
+  }, err => {
+    estado(err.code === 1 ? "Has denegado el permiso de ubicación. Actívalo en los ajustes del navegador para esta web." : "No se pudo obtener la ubicación. Prueba de nuevo o busca el lugar.");
+  }, {enableHighAccuracy:true, timeout:15000, maximumAge:60000});
+};
+
+/* ---------- buscador (OpenStreetMap Nominatim) ---------- */
+document.getElementById("buscador").onsubmit = async e => {
+  e.preventDefault();
+  const q = document.getElementById("q").value.trim();
+  if(!q) return;
+  document.getElementById("q").blur();
+  await buscarLugar(q);
+};
+async function buscarLugar(q){
+  estado("Buscando «" + q + "»…"); abrirPanel();
+  try{
+    const r = await getJSON("https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=es&q=" + encodeURIComponent(q));
+    if(!r.length){ estado("No he encontrado «" + q + "». Prueba con otro nombre."); return; }
+    const z = r[0].type === "city" || r[0].addresstype === "city" ? 13 : 14;
+    irA({lat:+r[0].lat, lon:+r[0].lon}, z);
+  }catch(err){ estado("Error al buscar. Comprueba la conexión."); }
+}
+
+/* Pulsación larga / clic en el mapa: buscar sitios en ese punto */
+mapa.on("contextmenu", e => irA({lat:e.latlng.lat, lon:e.latlng.lng}, mapa.getZoom()));
+
+function irA(pos, zoom){
+  centro = pos;
+  mapa.setView([pos.lat, pos.lon], zoom || 14);
+  vista = "lista"; fichaActual = null;
+  if(diaVista){ diaVista = null; capaDia.clearLayers(); $panel.style.maxHeight = ""; }
+  cargarSitios(pos);
+  tiempoCache = null;
+  if(pestana === "tiempo") pintarTiempo();
+}
+
+/* ---------- sitios cercanos (Wikipedia) ---------- */
+async function geoWiki(lang, pos){
+  const url = `https://${lang}.wikipedia.org/w/api.php?action=query&format=json&origin=*` +
+    `&generator=geosearch&ggscoord=${pos.lat}|${pos.lon}&ggsradius=${RADIO}&ggslimit=${MAX_SITIOS}` +
+    `&prop=coordinates|pageimages|description&piprop=thumbnail&pithumbsize=160&pilimit=${MAX_SITIOS}`;
+  const d = await getJSON(url);
+  return Object.values(d?.query?.pages || {}).filter(p => p.coordinates).map(p => ({
+    titulo: p.title, lang,
+    lat: p.coordinates[0].lat, lon: p.coordinates[0].lon,
+    foto: p.thumbnail?.source || "", desc: p.description || ""
+  }));
+}
+async function cargarSitios(pos){
+  if(pestana === "sitios") estado("Buscando sitios de interés cercanos…");
+  capaSitios.clearLayers(); sitios = [];
+  try{
+    let lista = await geoWiki("es", pos);
+    // Si en español hay pocos artículos (habitual fuera de países hispanos), se completa con inglés.
+    if(lista.length < 12){
+      try{
+        const en = await geoWiki("en", pos);
+        const cerca = (a,b) => distancia(a,b) < 0.08;
+        en.forEach(x => { if(!lista.some(y => cerca(x,y))) lista.push(x); });
+      }catch(_){}
+    }
+    lista.forEach(s => s.km = distancia(pos, s));
+    lista.sort((a,b) => (b.foto ? 1:0) - (a.foto ? 1:0) || a.km - b.km);
+    lista = lista.slice(0, 60).sort((a,b) => a.km - b.km);
+    sitios = lista;
+    lista.forEach((s, i) => {
+      L.circleMarker([s.lat, s.lon], {radius:8, color:"#fff", weight:2, fillColor: s.lang === "es" ? "#0f5c4d" : "#c77d00", fillOpacity:1})
+        .addTo(capaSitios).bindTooltip(s.titulo).on("click", () => abrirFicha(i));
+    });
+    if(pestana === "sitios" && vista === "lista") pintarLista();
+  }catch(err){
+    if(pestana === "sitios") estado("No se pudieron cargar los sitios. Comprueba la conexión.");
+  }
+}
+function pintarLista(){
+  if(!centro){ estado("Pulsa 📍 para ver qué hay cerca de ti, o busca un destino."); return; }
+  if(!sitios.length){ estado("No hay sitios con ficha en Wikipedia en esta zona. Prueba a buscar otro punto o mantén pulsado el mapa."); return; }
+  $contenido.innerHTML = `<div class="estado">${sitios.length} sitios en ${RADIO/1000} km · <span style="color:#c77d00">●</span> = ficha en inglés</div>` +
+    sitios.map((s,i) => `
+    <div class="sitio" data-i="${i}">
+      ${s.foto ? `<img src="${esc(s.foto)}" alt="" loading="lazy">` : `<div class="sinfoto">🏛️</div>`}
+      <div><b>${esc(s.titulo)}${s.lang==="en" ? '<span class="etq">EN</span>' : ""}</b>
+      <small>${fmtDist(s.km)}${s.desc ? " · " + esc(s.desc) : ""}</small></div>
+    </div>`).join("");
+  $contenido.querySelectorAll(".sitio").forEach(el => el.onclick = () => abrirFicha(+el.dataset.i));
+}
+
+/* ---------- ficha (resumen de Wikipedia) ---------- */
+async function abrirFicha(i){
+  const s = sitios[i];
+  mapa.setView([s.lat, s.lon], Math.max(mapa.getZoom(), 15));
+  await mostrarFicha(s.titulo, s.lang, s);
+}
+async function mostrarFicha(titulo, lang, base){
+  vista = "ficha"; abrirPanel();
+  if(pestana !== "sitios"){ pestana = "sitios"; document.querySelectorAll(".pestanas button").forEach(x => x.classList.toggle("activa", x.dataset.p === "sitios")); }
+  estado("Cargando ficha…");
+  try{
+    let d = await getJSON(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titulo.replace(/ /g,"_"))}`);
+    // Si se pidió en español y existe versión en español, se usa; si no, se intenta en inglés.
+    fichaActual = {
+      titulo: d.title, lang,
+      desc: d.description || base?.desc || "",
+      texto: d.extract || "",
+      foto: d.originalimage?.source || d.thumbnail?.source || base?.foto || "",
+      lat: d.coordinates?.lat ?? base?.lat, lon: d.coordinates?.lon ?? base?.lon,
+      url: d.content_urls?.mobile?.page || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(titulo)}`
+    };
+    pintarFicha(fichaActual);
+  }catch(err){
+    if(lang === "es"){ return mostrarFicha(titulo, "en", base); }
+    estado("No se pudo cargar la ficha de «" + titulo + "».");
+  }
+}
+function pintarFicha(f){
+  const hayPos = f.lat != null && f.lon != null;
+  const llegar = hayPos ? `https://www.google.com/maps/dir/?api=1&destination=${f.lat},${f.lon}` : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.titulo)}`;
+  const horarios = hayPos ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.titulo)}&query_place_id=` : llegar;
+  $contenido.innerHTML = `
+    <div class="ficha">
+      <button class="volver" id="volver">‹ Volver a la lista</button>
+      ${f.foto ? `<img class="foto" src="${esc(f.foto)}" alt="">` : ""}
+      <h2>${esc(f.titulo)}${f.lang==="en" ? '<span class="etq">EN</span>' : ""}</h2>
+      ${f.desc ? `<div class="desc">${esc(f.desc)}</div>` : ""}
+      <div class="acciones">
+        <a class="primario" href="${llegar}" target="_blank" rel="noopener">🧭 Cómo llegar</a>
+        <a class="secundario" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.titulo)}" target="_blank" rel="noopener">🕒 Horarios y precios</a>
+      </div>
+      <p>${esc(f.texto) || "Sin descripción disponible."}</p>
+      <div class="acciones">
+        <a class="secundario" href="${esc(f.url)}" target="_blank" rel="noopener">📖 Leer más en Wikipedia</a>
+      </div>
+      <div class="nota">Texto e imagen: Wikipedia / Wikimedia Commons (CC BY-SA).${f.lang==="en" ? " Esta ficha solo existe en inglés." : ""}</div>
+    </div>`;
+  const vol = document.getElementById("volver");
+  if(diaVista){ vol.textContent = "‹ Volver al día"; vol.onclick = () => { vista = "dia"; fichaActual = null; pintarDia(); }; }
+  else vol.onclick = () => { vista = "lista"; fichaActual = null; pintarLista(); };
+}
+
+/* ---------- vista de día con fotos (enlace desde el Planificador: ?dia=...) ---------- */
+let diaVista = null;   // {d, t, x, p:[{hora,nombre,nota,lat,lon,wiki,foto}]}
+const capaDia = L.layerGroup().addTo(mapa);
+async function fotosWiki(lang, paradas){
+  // Busca la foto principal de cada parada por su título de Wikipedia (o por su nombre si está cerca de sus coordenadas)
+  const pend = paradas.filter(p => !p.foto && (p.wiki || p.nombre));
+  if(!pend.length) return;
+  const tit = [...new Set(pend.map(p => p.wiki || p.nombre))].slice(0, 50);
+  const url = `https://${lang}.wikipedia.org/w/api.php?action=query&format=json&origin=*&redirects=1` +
+    `&prop=pageimages|coordinates&piprop=thumbnail&pithumbsize=640&titles=${encodeURIComponent(tit.join("|"))}`;
+  const d = await getJSON(url);
+  const mapaTit = {};
+  (d.query?.normalized || []).forEach(n => mapaTit[n.from] = n.to);
+  (d.query?.redirects || []).forEach(n => mapaTit[n.from] = n.to);
+  const real = t => { let x = t, i = 0; while(mapaTit[x] && i++ < 3) x = mapaTit[x]; return x; };
+  const paginas = {};
+  Object.values(d.query?.pages || {}).forEach(pg => { if(pg.pageid) paginas[pg.title] = pg; });
+  pend.forEach(p => {
+    const pg = paginas[real(p.wiki || p.nombre)];
+    if(!pg || !pg.thumbnail) return;
+    // Sin título de Wikipedia explícito, solo se acepta si el artículo está a menos de 3 km de la parada
+    if(!p.wiki){
+      if(p.lat == null || !pg.coordinates) return;
+      if(distancia({lat:p.lat, lon:p.lon}, {lat:pg.coordinates[0].lat, lon:pg.coordinates[0].lon}) > 3) return;
+    }
+    p.foto = pg.thumbnail.source; p.lang = lang; p.wiki = p.wiki || pg.title;
+  });
+}
+async function abrirDia(datos){
+  diaVista = datos; vista = "dia"; pestana = "sitios"; abrirPanel();
+  $panel.style.maxHeight = "58vh";
+  capaDia.clearLayers();
+  const pts = [];
+  datos.p.forEach((p, i) => {
+    if(p.lat == null || p.lon == null) return;
+    pts.push([p.lat, p.lon]);
+    L.marker([p.lat, p.lon], {icon: L.divIcon({className:"", html:`<div class="pin">${i+1}</div>`, iconSize:[26,26], iconAnchor:[13,13]})})
+      .addTo(capaDia).bindTooltip(p.nombre).on("click", () => abrirParadaDia(i));
+  });
+  if(pts.length > 1) L.polyline(pts, {color:"#0f5c4d", weight:3, opacity:.6, dashArray:"6 6"}).addTo(capaDia);
+  if(pts.length){
+    mapa.fitBounds(pts, {paddingTopLeft:[30,80], paddingBottomRight:[30, Math.round(window.innerHeight*0.6)], maxZoom:15});
+    centro = {lat: pts[0][0], lon: pts[0][1]}; tiempoCache = null;
+  } else if(datos.x){ buscarLugar(datos.x).then(() => { vista = "dia"; pintarDia(); }); }
+  pintarDia();
+  try{ await fotosWiki("es", datos.p); }catch(_){}
+  try{ await fotosWiki("en", datos.p); }catch(_){}
+  if(vista === "dia" && pestana === "sitios") pintarDia();
+}
+function pintarDia(){
+  const d = diaVista;
+  $contenido.innerHTML = `<div class="diacab"><h2>${esc(d.d || "Itinerario")}</h2>
+    <div class="desc">${esc([d.t, d.x].filter(Boolean).join(" · "))}</div></div>` +
+    d.p.map((p, i) => `
+    <div class="pdia" data-i="${i}">
+      <div class="img"><span class="num">${i+1}</span>${p.foto ? `<img src="${esc(p.foto)}" alt="" loading="lazy">` : (/comida|almuerzo|cena|desayuno|restaurante|izakaya|mercado/i.test(p.nombre) ? "🍽️" : /tren|traslado|estación|aeropuerto|shinkansen|vuelo|bus/i.test(p.nombre) ? "🚆" : "🏛️")}</div>
+      <div class="txt">${p.hora ? `<span class="h">${esc(p.hora)}</span>` : ""}<b>${esc(p.nombre)}</b>
+      ${p.nota ? `<p>${esc(p.nota)}</p>` : ""}</div>
+    </div>`).join("") +
+    `<div class="nota">Fotos: Wikipedia / Wikimedia Commons. Toca una parada para ver su ficha.</div>`;
+  $contenido.querySelectorAll(".pdia").forEach(el => el.onclick = () => abrirParadaDia(+el.dataset.i));
+}
+function abrirParadaDia(i){
+  const p = diaVista.p[i];
+  if(p.lat != null) mapa.setView([p.lat, p.lon], Math.max(mapa.getZoom(), 15));
+  if(p.wiki) mostrarFicha(p.wiki, p.lang || "es", {lat:p.lat, lon:p.lon, foto:p.foto, desc:p.nota});
+  else { fichaActual = {titulo:p.nombre, lang:"es", desc:"", texto:p.nota || "", foto:"", lat:p.lat, lon:p.lon,
+         url:`https://es.wikipedia.org/w/index.php?search=${encodeURIComponent(p.nombre)}`}; vista = "ficha"; pintarFicha(fichaActual); }
+}
+
+/* ---------- tiempo (Open-Meteo) ---------- */
+const WMO = {0:["☀️","Despejado"],1:["🌤️","Casi despejado"],2:["⛅","Parcialmente nuboso"],3:["☁️","Nublado"],45:["🌫️","Niebla"],48:["🌫️","Niebla con escarcha"],
+  51:["🌦️","Llovizna débil"],53:["🌦️","Llovizna"],55:["🌦️","Llovizna intensa"],56:["🌧️","Llovizna helada"],57:["🌧️","Llovizna helada"],
+  61:["🌧️","Lluvia débil"],63:["🌧️","Lluvia"],65:["🌧️","Lluvia fuerte"],66:["🌧️","Lluvia helada"],67:["🌧️","Lluvia helada fuerte"],
+  71:["🌨️","Nieve débil"],73:["🌨️","Nieve"],75:["❄️","Nieve fuerte"],77:["🌨️","Granizo fino"],80:["🌦️","Chubascos débiles"],81:["🌧️","Chubascos"],82:["⛈️","Chubascos fuertes"],
+  85:["🌨️","Chubascos de nieve"],86:["❄️","Chubascos de nieve fuertes"],95:["⛈️","Tormenta"],96:["⛈️","Tormenta con granizo"],99:["⛈️","Tormenta con granizo"]};
+const wmo = c => WMO[c] || ["🌡️","—"];
+let tiempoCache = null;
+async function pintarTiempo(){
+  if(!centro){ estado("Busca un destino o pulsa 📍 para ver el tiempo."); return; }
+  if(tiempoCache){ return dibujarTiempo(tiempoCache); }
+  estado("Cargando el tiempo…");
+  try{
+    const u = `https://api.open-meteo.com/v1/forecast?latitude=${centro.lat}&longitude=${centro.lon}` +
+      `&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,relative_humidity_2m` +
+      `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=7`;
+    tiempoCache = await getJSON(u);
+    if(pestana === "tiempo") dibujarTiempo(tiempoCache);
+  }catch(err){ estado("No se pudo cargar el tiempo. Comprueba la conexión."); }
+}
+function dibujarTiempo(d){
+  const c = d.current, [ico, txt] = wmo(c.weather_code);
+  const dias = d.daily.time.map((t, i) => {
+    const f = new Date(t + "T12:00:00");
+    const nombre = i === 0 ? "Hoy" : i === 1 ? "Mañana" : f.toLocaleDateString("es-ES", {weekday:"short", day:"numeric"});
+    const [di, dt] = wmo(d.daily.weather_code[i]);
+    const ll = d.daily.precipitation_probability_max?.[i];
+    return `<div class="dia"><span>${nombre}</span><span>${di}</span><span>${dt}${ll != null ? ` <span class="ll">💧${ll}%</span>` : ""}</span>
+      <b>${Math.round(d.daily.temperature_2m_max[i])}° / <span style="color:var(--gris)">${Math.round(d.daily.temperature_2m_min[i])}°</span></b></div>`;
+  }).join("");
+  $contenido.innerHTML = `
+    <div class="ahora"><span class="ico">${ico}</span><div><div class="temp">${Math.round(c.temperature_2m)}°C</div>
+    <div class="estado" style="padding:0">${txt} · sensación ${Math.round(c.apparent_temperature)}° · viento ${Math.round(c.wind_speed_10m)} km/h · humedad ${c.relative_humidity_2m}%</div></div></div>
+    ${dias}
+    <div class="nota">Previsión para el punto del mapa · Fuente: Open-Meteo. Hora local del destino.</div>`;
+}
+
+/* ---------- arranque: parámetros de enlace ---------- */
+(function inicio(){
+  const p = new URLSearchParams(location.search);
+  const lat = parseFloat(p.get("lat")), lon = parseFloat(p.get("lon")), q = p.get("q"), t = p.get("t");
+  let dia = null;
+  try{ if(p.get("dia")) dia = JSON.parse(p.get("dia")); }catch(_){}
+  if(dia && Array.isArray(dia.p)){
+    const num = v => (v === null || v === "" || !isFinite(+v)) ? null : +v;
+    abrirDia({d: String(dia.d||""), t: String(dia.t||""), x: String(dia.x||""),
+      p: dia.p.slice(0, 15).map(a => ({hora:String(a[0]||""), nombre:String(a[1]||"Parada"), nota:String(a[2]||""), lat:num(a[3]), lon:num(a[4]), wiki:String(a[5]||"")}))});
+  } else if(!isNaN(lat) && !isNaN(lon)){
+    irA({lat, lon}, 15);
+    if(t){ setTimeout(() => mostrarFicha(t, "es", {lat, lon}), 300); }
+  } else if(q){
+    document.getElementById("q").value = q; buscarLugar(q);
+  } else if(t){
+    mostrarFicha(t, "es");
+  }
+})();
+</script>
+</body>
+</html>
