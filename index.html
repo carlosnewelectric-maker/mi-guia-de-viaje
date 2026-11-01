@@ -150,18 +150,34 @@ function pintar(){
 }
 
 /* ---------- ubicación ---------- */
-document.getElementById("btnYo").onclick = () => {
+/* Localización: centra el mapa en ti, busca sitios cercanos y mantiene el punto azul actualizado */
+let vigilaYo = null, ultimaBusqueda = null;
+function ponerPuntoYo(pos, precision){
+  if(marcaYo) marcaYo.setLatLng([pos.lat, pos.lon]);
+  else marcaYo = L.marker([pos.lat, pos.lon], {icon: L.divIcon({className:"", html:'<div class="yo"></div>', iconSize:[18,18]}), zIndexOffset: 1000}).addTo(mapa).bindTooltip("Estás aquí");
+}
+const AYUDA_PERMISO = "No hay permiso de ubicación. En iPhone: Ajustes › Privacidad y seguridad › Localización › activa la localización y permite el acceso a Safari (o a la app desde la que abriste la Guía: «Al usar la app»). Después recarga esta página.";
+function localizarme(respaldo){
   if(!navigator.geolocation){ estado("Este navegador no permite obtener la ubicación."); return; }
-  estado("Buscando tu ubicación…"); abrirPanel();
-  navigator.geolocation.getCurrentPosition(p => {
-    const pos = {lat:p.coords.latitude, lon:p.coords.longitude};
-    if(marcaYo) marcaYo.remove();
-    marcaYo = L.marker([pos.lat, pos.lon], {icon: L.divIcon({className:"", html:'<div class="yo"></div>', iconSize:[18,18]})}).addTo(mapa);
-    irA(pos, 14);
-  }, err => {
-    estado(err.code === 1 ? "Has denegado el permiso de ubicación. Actívalo en los ajustes del navegador para esta web." : "No se pudo obtener la ubicación. Prueba de nuevo o busca el lugar.");
-  }, {enableHighAccuracy:true, timeout:15000, maximumAge:60000});
-};
+  estado("📡 Buscando tu ubicación por GPS…"); abrirPanel();
+  let primera = true;
+  const ok = p => {
+    const pos = {lat: p.coords.latitude, lon: p.coords.longitude};
+    ponerPuntoYo(pos, p.coords.accuracy);
+    if(primera){ primera = false; ultimaBusqueda = pos; irA(pos, 15); return; }
+    // al caminar: el punto azul se mueve; si te alejas más de 400 m se actualizan los sitios cercanos
+    if(!diaVista && vista === "lista" && pestana === "sitios" && distancia(pos, ultimaBusqueda) > 0.4){ ultimaBusqueda = pos; centro = pos; cargarSitios(pos); }
+  };
+  const ko = err => {
+    if(!primera) return;
+    const msg = err.code === 1 ? AYUDA_PERMISO : "No se pudo obtener la señal GPS. Sal a un lugar abierto o vuelve a pulsar 📍.";
+    if(respaldo){ irA(respaldo, 15); setTimeout(() => { $contenido.insertAdjacentHTML("afterbegin", `<div class="estado" style="background:#fff3d6;border-radius:10px;padding:8px;margin-bottom:6px">⚠️ ${esc(msg)}<br>Mostrando la última posición conocida${respaldo.nombre ? ": " + esc(respaldo.nombre) : ""}.</div>`); }, 1200); }
+    else estado("⚠️ " + msg);
+  };
+  if(vigilaYo != null) navigator.geolocation.clearWatch(vigilaYo);
+  vigilaYo = navigator.geolocation.watchPosition(ok, ko, {enableHighAccuracy:true, timeout:20000, maximumAge:30000});
+}
+document.getElementById("btnYo").onclick = () => localizarme(null);
 
 /* ---------- buscador (OpenStreetMap Nominatim) ---------- */
 document.getElementById("buscador").onsubmit = async e => {
@@ -455,7 +471,12 @@ function cerrarAvisoGps(){ document.getElementById("avisoGPS").style.display = "
   const lat = parseFloat(p.get("lat")), lon = parseFloat(p.get("lon")), q = p.get("q"), t = p.get("t");
   let dia = null;
   try{ if(p.get("dia")) dia = JSON.parse(p.get("dia")); }catch(_){}
-  if(dia && Array.isArray(dia.p)){
+  if(p.get("cerca")){
+    // «¿Qué hay cerca?» desde el Planificador: GPS automático; si falla, última posición conocida
+    const respaldo = (!isNaN(lat) && !isNaN(lon)) ? {lat, lon, nombre: p.get("ref") || ""} : null;
+    if(respaldo) mapa.setView([lat, lon], 14);
+    localizarme(respaldo);
+  } else if(dia && Array.isArray(dia.p)){
     const num = v => (v === null || v === "" || !isFinite(+v)) ? null : +v;
     abrirDia({d: String(dia.d||""), t: String(dia.t||""), x: String(dia.x||""),
       p: dia.p.slice(0, 15).map(a => ({hora:String(a[0]||""), nombre:String(a[1]||"Parada"), nota:String(a[2]||""), lat:num(a[3]), lon:num(a[4]), wiki:String(a[5]||""),
