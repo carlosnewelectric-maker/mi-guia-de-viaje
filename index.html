@@ -80,6 +80,14 @@
   .selIni button{border:1px solid var(--linea);background:#fff;border-radius:16px;padding:6px 10px;font-size:13px;font-weight:600;color:var(--gris)}
   .selIni button.activa{background:var(--verde);border-color:var(--verde);color:#fff}
   .sitio .num{flex:none;width:26px;height:26px;border-radius:50%;background:var(--verde);color:#fff;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center}
+  .dia.clic{cursor:pointer}
+  .dia.sel{background:var(--verde2);border-radius:10px}
+  .horas{border:1px solid var(--linea);border-radius:12px;padding:8px 10px;margin:6px 0 10px;background:#fff}
+  .horas .res{font-size:14px;line-height:1.45;margin:2px 0 8px}
+  .hora{display:grid;grid-template-columns:48px 28px 46px 1fr 62px;align-items:center;gap:6px;padding:5px 0;border-top:1px solid var(--linea);font-size:14px}
+  .hora .barra{height:8px;border-radius:4px;background:#e3ecf7;overflow:hidden}
+  .hora .barra i{display:block;height:100%;background:#2b6cb0}
+  .hora.lluvia{background:#eef4fc}
   .yo{width:18px;height:18px;border-radius:50%;background:#1a73e8;border:3px solid #fff;box-shadow:0 0 0 2px rgba(26,115,232,.35)}
 </style>
 </head>
@@ -512,7 +520,8 @@ async function abrirDia(datos){
 function pintarDia(){
   const d = diaVista;
   $contenido.innerHTML = `<div class="diacab"><h2>${esc(d.d || "Itinerario")}</h2>
-    <div class="desc">${esc([d.t, d.x].filter(Boolean).join(" · "))}</div><div class="gpsest" id="gpsest">${esc(gpsEstado)}</div></div>` +
+    <div class="desc">${esc([d.t, d.x].filter(Boolean).join(" · "))}</div><div class="gpsest" id="gpsest">${esc(gpsEstado)}</div>
+    ${diaViaje ? `<button class="volver" id="verTiempoDia" style="padding:2px 0 6px">⛅ Ver el tiempo por horas de este día ›</button>` : ""}</div>` +
     d.p.map((p, i) => `
     <div class="pdia" data-i="${i}">
       <div class="img"><span class="num">${i+1}</span>${p.foto ? `<img src="${esc(p.foto)}" alt="" loading="lazy">` : (/comida|almuerzo|cena|desayuno|restaurante|izakaya|mercado/i.test(p.nombre) ? "🍽️" : /tren|traslado|estación|aeropuerto|shinkansen|vuelo|bus/i.test(p.nombre) ? "🚆" : "🏛️")}</div>
@@ -521,6 +530,8 @@ function pintarDia(){
     </div>`).join("") +
     `<div class="nota">Fotos: Wikipedia / Wikimedia Commons. Toca una parada para ver su ficha.</div>`;
   $contenido.querySelectorAll(".pdia").forEach(el => el.onclick = () => abrirParadaDia(+el.dataset.i));
+  const vt = document.getElementById("verTiempoDia");
+  if(vt) vt.onclick = () => { diaTiempo = diaViaje; pestana = "tiempo"; document.querySelectorAll(".pestanas button").forEach(x => x.classList.toggle("activa", x.dataset.p === "tiempo")); pintarTiempo(); };
 }
 function abrirParadaDia(i){
   const p = diaVista.p[i];
@@ -545,26 +556,71 @@ async function pintarTiempo(){
   try{
     const u = `https://api.open-meteo.com/v1/forecast?latitude=${centro.lat}&longitude=${centro.lon}` +
       `&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,relative_humidity_2m` +
-      `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=7`;
+      `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum&timezone=auto&forecast_days=16` +
+      `&hourly=temperature_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m`;
     tiempoCache = await getJSON(u);
     if(pestana === "tiempo") dibujarTiempo(tiempoCache);
   }catch(err){ estado("No se pudo cargar el tiempo. Comprueba la conexión."); }
 }
+let diaTiempo = null, diaViaje = null, verDiasTiempo = 7;   // día desplegado; fecha del día del itinerario (si viene del Planificador)
+function horasDe(d, fecha){
+  const H = d.hourly; if(!H) return [];
+  const out = [];
+  H.time.forEach((t, i) => { if(t.slice(0,10) === fecha) out.push({h: t.slice(11,16), hh: +t.slice(11,13), temp: H.temperature_2m[i], prob: H.precipitation_probability?.[i], mm: H.precipitation?.[i], code: H.weather_code[i], viento: H.wind_speed_10m?.[i]}); });
+  return out;
+}
+/* resumen en castellano: tramos de lluvia y mejores horas para pasear */
+function resumenHoras(hs){
+  const dia = hs.filter(x => x.hh >= 7 && x.hh <= 22);
+  const llueve = x => (x.prob ?? 0) >= 50 || (x.mm ?? 0) >= 0.3;
+  const tramos = []; let act = null;
+  dia.forEach(x => { if(llueve(x)){ if(!act) act = {ini:x.hh, fin:x.hh, max:x.prob ?? 0, mm:0}; act.fin = x.hh; act.max = Math.max(act.max, x.prob ?? 0); act.mm += x.mm ?? 0; } else if(act){ tramos.push(act); act = null; } });
+  if(act) tramos.push(act);
+  let mejor = null, cur = null;
+  dia.filter(x => x.hh >= 8 && x.hh <= 21).forEach(x => { if((x.prob ?? 0) < 30 && (x.mm ?? 0) < 0.1){ if(!cur) cur = {ini:x.hh, fin:x.hh}; cur.fin = x.hh; if(!mejor || cur.fin - cur.ini > mejor.fin - mejor.ini) mejor = {...cur}; } else cur = null; });
+  const hh = n => String(n).padStart(2,"0") + ":00";
+  let txt = tramos.length ? tramos.map(t => `🌧️ Lluvia probable de ${hh(t.ini)} a ${hh(t.fin + 1)} (hasta ${t.max} %${t.mm >= 0.1 ? `, unos ${t.mm.toFixed(1).replace(".", ",")} mm` : ""})`).join("<br>") : "☀️ Sin lluvia prevista durante el día.";
+  if(mejor && tramos.length) txt += `<br>👟 Mejores horas para pasear: ${hh(mejor.ini)}–${hh(mejor.fin + 1)}.`;
+  const max = Math.max(...dia.map(x => x.temp)), min = Math.min(...dia.map(x => x.temp));
+  if(isFinite(max)) txt += `<br>🌡️ Entre ${Math.round(min)}° y ${Math.round(max)}° (de 7:00 a 22:00).`;
+  return txt;
+}
+function htmlHoras(d, fecha){
+  const ahora = d.current?.time ? d.current.time.slice(0,13) : "";
+  let hs = horasDe(d, fecha).filter(x => x.hh >= 6);
+  if(fecha === (d.current?.time || "").slice(0,10)) hs = hs.filter(x => (fecha + "T" + x.h).slice(0,13) >= ahora);
+  if(!hs.length) return `<div class="horas"><div class="estado">No hay datos por horas para este día.</div></div>`;
+  return `<div class="horas"><div class="res">${resumenHoras(horasDe(d, fecha))}</div>
+    ${hs.map(x => { const [i] = wmo(x.code), p = x.prob ?? 0;
+      return `<div class="hora ${p >= 50 ? "lluvia" : ""}"><b>${x.h}</b><span>${i}</span><span>${Math.round(x.temp)}°</span>
+        <span title="Probabilidad de lluvia"><span class="barra"><i style="width:${p}%"></i></span><span class="ll">💧${p}%${(x.mm ?? 0) >= 0.1 ? " · " + x.mm.toFixed(1).replace(".", ",") + " mm" : ""}</span></span>
+        <span class="estado" style="padding:0;font-size:12px">💨 ${Math.round(x.viento ?? 0)} km/h</span></div>`; }).join("")}</div>`;
+}
 function dibujarTiempo(d){
   const c = d.current, [ico, txt] = wmo(c.weather_code);
-  const dias = d.daily.time.map((t, i) => {
+  const fechas = d.daily.time;
+  if(!diaTiempo || !fechas.includes(diaTiempo)) diaTiempo = (diaViaje && fechas.includes(diaViaje)) ? diaViaje : fechas[0];
+  const fueraDeRango = diaViaje && !fechas.includes(diaViaje);
+  const mostrar = Math.max(verDiasTiempo, fechas.indexOf(diaTiempo) + 1);
+  const dias = fechas.slice(0, mostrar).map((t, i) => {
     const f = new Date(t + "T12:00:00");
     const nombre = i === 0 ? "Hoy" : i === 1 ? "Mañana" : f.toLocaleDateString("es-ES", {weekday:"short", day:"numeric"});
     const [di, dt] = wmo(d.daily.weather_code[i]);
     const ll = d.daily.precipitation_probability_max?.[i];
-    return `<div class="dia"><span>${nombre}</span><span>${di}</span><span>${dt}${ll != null ? ` <span class="ll">💧${ll}%</span>` : ""}</span>
-      <b>${Math.round(d.daily.temperature_2m_max[i])}° / <span style="color:var(--gris)">${Math.round(d.daily.temperature_2m_min[i])}°</span></b></div>`;
+    const sel = t === diaTiempo;
+    return `<div class="dia clic ${sel ? "sel" : ""}" data-f="${t}"><span>${sel ? "▾ " : "▸ "}${nombre}${t === diaViaje ? " 📍" : ""}</span><span>${di}</span><span>${dt}${ll != null ? ` <span class="ll">💧${ll}%</span>` : ""}</span>
+      <b>${Math.round(d.daily.temperature_2m_max[i])}° / <span style="color:var(--gris)">${Math.round(d.daily.temperature_2m_min[i])}°</span></b></div>${sel ? htmlHoras(d, t) : ""}`;
   }).join("");
   $contenido.innerHTML = `
+    ${fueraDeRango ? `<div class="estado" style="background:#fff3d6;border-radius:10px;padding:8px;margin-bottom:6px">📅 Vuestro día aquí es el ${new Date(diaViaje + "T12:00:00").toLocaleDateString("es-ES",{weekday:"long", day:"numeric", month:"long"})}: la previsión por horas estará disponible unos 16 días antes.</div>` : ""}
     <div class="ahora"><span class="ico">${ico}</span><div><div class="temp">${Math.round(c.temperature_2m)}°C</div>
     <div class="estado" style="padding:0">${txt} · sensación ${Math.round(c.apparent_temperature)}° · viento ${Math.round(c.wind_speed_10m)} km/h · humedad ${c.relative_humidity_2m}%</div></div></div>
+    <div class="estado">Toca un día para ver el tiempo por horas.${diaViaje && !fueraDeRango ? " 📍 = vuestro día en este sitio." : ""}</div>
     ${dias}
+    ${mostrar < fechas.length ? `<button class="volver" id="masDias">Ver los ${fechas.length} días ›</button>` : ""}
     <div class="nota">Previsión para el punto del mapa · Fuente: Open-Meteo. Hora local del destino.</div>`;
+  $contenido.querySelectorAll(".dia.clic").forEach(el => el.onclick = () => { diaTiempo = el.dataset.f; dibujarTiempo(d); el.scrollIntoView && setTimeout(() => $contenido.querySelector(".dia.sel")?.scrollIntoView({block:"start", behavior:"smooth"}), 30); });
+  const md = document.getElementById("masDias"); if(md) md.onclick = () => { verDiasTiempo = 16; dibujarTiempo(d); };
 }
 
 /* ---------- aviso por GPS al llegar a una parada del día ---------- */
@@ -624,6 +680,7 @@ function cerrarAvisoGps(){ document.getElementById("avisoGPS").style.display = "
     localizarme(respaldo);
   } else if(dia && Array.isArray(dia.p)){
     const num = v => (v === null || v === "" || !isFinite(+v)) ? null : +v;
+    if(/^\d{4}-\d{2}-\d{2}$/.test(String(dia.f || ""))) diaViaje = dia.f;
     abrirDia({d: String(dia.d||""), t: String(dia.t||""), x: String(dia.x||""),
       p: dia.p.slice(0, 15).map(a => ({hora:String(a[0]||""), nombre:String(a[1]||"Parada"), nota:String(a[2]||""), lat:num(a[3]), lon:num(a[4]), wiki:String(a[5]||""),
         id: /^[A-Za-z0-9]{1,40}$/.test(String(a[6]||"")) ? String(a[6]) : "", visitado: !!a[7]}))});
