@@ -74,6 +74,12 @@
   .avisoGPS b{font-size:17px}
   .avisoGPS .acciones a,.avisoGPS .acciones button{min-width:0}
   .gpsest{font-size:12px;color:var(--gris);margin:2px 0 6px}
+  .pinN{color:#fff;font-weight:700;font-size:12px;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+  .pinIni{background:#fff;border:2px solid var(--verde);border-radius:14px;padding:2px 7px;font-size:13px;font-weight:700;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.3)}
+  .selIni{display:flex;gap:6px;align-items:center;margin:2px 0 8px;font-size:13px;color:var(--gris)}
+  .selIni button{border:1px solid var(--linea);background:#fff;border-radius:16px;padding:6px 10px;font-size:13px;font-weight:600;color:var(--gris)}
+  .selIni button.activa{background:var(--verde);border-color:var(--verde);color:#fff}
+  .sitio .num{flex:none;width:26px;height:26px;border-radius:50%;background:var(--verde);color:#fff;font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center}
   .yo{width:18px;height:18px;border-radius:50%;background:#1a73e8;border:3px solid #fff;box-shadow:0 0 0 2px rgba(26,115,232,.35)}
 </style>
 </head>
@@ -163,8 +169,8 @@ function localizarme(respaldo){
   let primera = true;
   const ok = p => {
     const pos = {lat: p.coords.latitude, lon: p.coords.longitude};
-    ponerPuntoYo(pos, p.coords.accuracy);
-    if(primera){ primera = false; ultimaBusqueda = pos; irA(pos, 15); return; }
+    ponerPuntoYo(pos, p.coords.accuracy); posYo = pos;
+    if(primera){ primera = false; ultimaBusqueda = pos; modoInicio = "yo"; irA(pos, 15); return; }
     // al caminar: el punto azul se mueve; si te alejas más de 400 m se actualizan los sitios cercanos
     if(!diaVista && vista === "lista" && pestana === "sitios" && distancia(pos, ultimaBusqueda) > 0.4){ ultimaBusqueda = pos; centro = pos; cargarSitios(pos); }
   };
@@ -187,13 +193,29 @@ document.getElementById("buscador").onsubmit = async e => {
   document.getElementById("q").blur();
   await buscarLugar(q);
 };
+/* estación principal de una ciudad (OpenStreetMap) */
+async function buscarEstacion(ciudad, pos){
+  const consultas = [`${ciudad} station`, `estación de ${ciudad}`, `${ciudad} 駅`];
+  for(const c of consultas){
+    try{
+      const r = await getJSON("https://nominatim.openstreetmap.org/search?format=json&limit=8&accept-language=es&q=" + encodeURIComponent(c));
+      const est = r.filter(x => (x.class === "railway" || x.type === "station" || x.type === "train_station" || /station|estaci/i.test(x.type || "")) && distancia(pos, {lat:+x.lat, lon:+x.lon}) < 15)
+        .sort((a,b) => (+b.importance || 0) - (+a.importance || 0))[0];
+      if(est) return {lat:+est.lat, lon:+est.lon, nombre: (est.name || est.display_name || "Estación").split(",")[0]};
+    }catch(_){}
+  }
+  return null;
+}
 async function buscarLugar(q){
   estado("Buscando «" + q + "»…"); abrirPanel();
   try{
     const r = await getJSON("https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=es&q=" + encodeURIComponent(q));
     if(!r.length){ estado("No he encontrado «" + q + "». Prueba con otro nombre."); return; }
     const z = r[0].type === "city" || r[0].addresstype === "city" ? 13 : 14;
-    irA({lat:+r[0].lat, lon:+r[0].lon}, z);
+    const pos = {lat:+r[0].lat, lon:+r[0].lon};
+    estacion = await buscarEstacion(r[0].name || q, pos);
+    modoInicio = estacion ? "estacion" : "centro";
+    irA(pos, z);
   }catch(err){ estado("Error al buscar. Comprueba la conexión."); }
 }
 
@@ -222,7 +244,9 @@ async function geoWiki(lang, pos){
     foto: p.thumbnail?.source || "", desc: p.description || ""
   }));
 }
+let estacion = null, modoInicio = "centro", posYo = null, busquedaId = 0;
 async function cargarSitios(pos){
+  const miBusqueda = ++busquedaId;
   if(pestana === "sitios") estado("Buscando sitios de interés cercanos…");
   capaSitios.clearLayers(); sitios = [];
   try{
@@ -236,31 +260,74 @@ async function cargarSitios(pos){
       }catch(_){}
     }
     await aEspanol(lista);
+    if(miBusqueda !== busquedaId) return;                 // una búsqueda más reciente ya está en marcha
     lista.forEach(s => s.km = distancia(pos, s));
     lista.sort((a,b) => (b.foto ? 1:0) - (a.foto ? 1:0) || a.km - b.km);
-    lista = lista.slice(0, 60).sort((a,b) => a.km - b.km);
-    sitios = lista;
-    lista.forEach((s, i) => {
-      L.circleMarker([s.lat, s.lon], {radius:8, color:"#fff", weight:2, fillColor: s.lang === "es" ? "#0f5c4d" : "#c77d00", fillOpacity:1})
-        .addTo(capaSitios).bindTooltip(s.titulo).on("click", () => abrirFicha(i));
-    });
-    if(pestana === "sitios" && vista === "lista") pintarLista();
-    traducirDescripciones(lista);
+    sitios = lista.slice(0, 60);
+    ordenarYpintar();
+    traducirDescripciones(sitios);
   }catch(err){
+    if(miBusqueda !== busquedaId) return;
     if(pestana === "sitios") estado("No se pudieron cargar los sitios. Comprueba la conexión.");
   }
+}
+/* punto de inicio de la ruta */
+function puntoInicio(){
+  if(modoInicio === "estacion" && estacion) return {...estacion, icono:"🚉", etiqueta: estacion.nombre};
+  if(modoInicio === "yo" && posYo) return {...posYo, icono:"📍", etiqueta:"Mi posición"};
+  if(posYo) return {...posYo, icono:"📍", etiqueta:"Mi posición"};
+  return centro ? {...centro, icono:"⭐", etiqueta:"Centro de la búsqueda"} : null;
+}
+/* orden de visita en cadena: cada sitio es el más próximo al anterior (ruta a pie sin ir y volver) */
+function ordenarYpintar(){
+  const ini = puntoInicio();
+  capaSitios.clearLayers();
+  if(!ini || !sitios.length){ if(pestana === "sitios" && vista === "lista") pintarLista(); return; }
+  const pend = sitios.slice(), orden = [];
+  let actual = ini;
+  while(pend.length){
+    let k = 0, dk = Infinity;
+    pend.forEach((s, i) => { const d = distancia(actual, s); if(d < dk){ dk = d; k = i; } });
+    const s = pend.splice(k, 1)[0]; s.paso = dk; s.km = distancia(ini, s); orden.push(s); actual = s;
+  }
+  sitios = orden;
+  L.marker([ini.lat, ini.lon], {icon: L.divIcon({className:"", html:`<div class="pinIni">${ini.icono} Inicio</div>`, iconSize:null, iconAnchor:[30, 12]}), zIndexOffset: 900}).addTo(capaSitios).bindTooltip(ini.etiqueta);
+  L.polyline([[ini.lat, ini.lon], ...sitios.map(s => [s.lat, s.lon])], {color:"#0f5c4d", weight:2, opacity:.5, dashArray:"5 6"}).addTo(capaSitios);
+  sitios.forEach((s, i) => {
+    L.marker([s.lat, s.lon], {icon: L.divIcon({className:"", html:`<div class="pinN" style="background:${s.lang === "es" ? "#0f5c4d" : "#c77d00"}">${i+1}</div>`, iconSize:[24,24], iconAnchor:[12,12]})})
+      .addTo(capaSitios).bindTooltip(`${i+1}. ${s.titulo}`).on("click", () => abrirFicha(i));
+  });
+  // encuadre: inicio + los primeros sitios de la ruta, sin quedar tapados por el panel
+  const pts = [[ini.lat, ini.lon], ...sitios.slice(0, 15).map(s => [s.lat, s.lon])];
+  try{ mapa.fitBounds(pts, {paddingTopLeft:[30, 80], paddingBottomRight:[30, Math.round(window.innerHeight * 0.55)], maxZoom: 16}); }catch(_){}
+  if(pestana === "sitios" && vista === "lista") pintarLista();
 }
 function pintarLista(){
   if(!centro){ estado("Pulsa 📍 para ver qué hay cerca de ti, o busca un destino."); return; }
   if(!sitios.length){ estado("No hay sitios con ficha en Wikipedia en esta zona. Prueba a buscar otro punto o mantén pulsado el mapa."); return; }
-  $contenido.innerHTML = `<div class="estado">${sitios.length} sitios en ${RADIO/1000} km · <span style="color:#c77d00">●</span> = ficha traducida automáticamente</div>` +
+  const ini = puntoInicio();
+  $contenido.innerHTML = `<div class="selIni">Empezar en:
+      <button data-ini="estacion" class="${modoInicio === "estacion" && estacion ? "activa" : ""}" ${estacion ? "" : "disabled"}>🚉 ${esc(estacion ? estacion.nombre : "Estación")}</button>
+      <button data-ini="yo" class="${ini && ini.icono === "📍" ? "activa" : ""}">📍 Mi posición</button></div>
+    <div class="estado">${sitios.length} sitios en orden de ruta desde ${esc(ini ? ini.etiqueta : "el centro")} · <span style="color:#c77d00">●</span> = ficha traducida</div>` +
     sitios.map((s,i) => `
     <div class="sitio" data-i="${i}">
+      <span class="num" style="background:${s.lang === "es" ? "#0f5c4d" : "#c77d00"}">${i+1}</span>
       ${s.foto ? `<img src="${esc(s.foto)}" alt="" loading="lazy">` : `<div class="sinfoto">🏛️</div>`}
       <div><b>${esc(s.titulo)}</b>
-      <small>${fmtDist(s.km)}${s.desc ? " · " + esc(s.desc) : ""}</small></div>
+      <small>${s.paso != null ? (i === 0 ? "a " : "+") + fmtDist(s.paso) + (i === 0 ? " del inicio" : " desde el " + i) : fmtDist(s.km)}${s.desc ? " · " + esc(s.desc) : ""}</small></div>
     </div>`).join("");
   $contenido.querySelectorAll(".sitio").forEach(el => el.onclick = () => abrirFicha(+el.dataset.i));
+  $contenido.querySelectorAll("[data-ini]").forEach(b => b.onclick = () => {
+    if(b.dataset.ini === "estacion"){ modoInicio = "estacion"; ordenarYpintar(); return; }
+    modoInicio = "yo";
+    if(posYo) return ordenarYpintar();
+    if(!navigator.geolocation) return;
+    estado("📡 Buscando tu ubicación por GPS…");
+    navigator.geolocation.getCurrentPosition(p => { posYo = {lat:p.coords.latitude, lon:p.coords.longitude}; ponerPuntoYo(posYo); ordenarYpintar(); },
+      err => { pintarLista(); $contenido.insertAdjacentHTML("afterbegin", `<div class="estado" style="background:#fff3d6;border-radius:10px;padding:8px">⚠️ ${esc(err.code === 1 ? AYUDA_PERMISO : "No se pudo obtener la señal GPS.")}</div>`); },
+      {enableHighAccuracy:true, timeout:15000, maximumAge:60000});
+  });
 }
 
 /* ---------- castellano: versión española de Wikipedia y traducción automática ---------- */
