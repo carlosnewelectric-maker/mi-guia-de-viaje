@@ -235,6 +235,7 @@ async function cargarSitios(pos){
         en.forEach(x => { if(!lista.some(y => cerca(x,y))) lista.push(x); });
       }catch(_){}
     }
+    await aEspanol(lista);
     lista.forEach(s => s.km = distancia(pos, s));
     lista.sort((a,b) => (b.foto ? 1:0) - (a.foto ? 1:0) || a.km - b.km);
     lista = lista.slice(0, 60).sort((a,b) => a.km - b.km);
@@ -244,6 +245,7 @@ async function cargarSitios(pos){
         .addTo(capaSitios).bindTooltip(s.titulo).on("click", () => abrirFicha(i));
     });
     if(pestana === "sitios" && vista === "lista") pintarLista();
+    traducirDescripciones(lista);
   }catch(err){
     if(pestana === "sitios") estado("No se pudieron cargar los sitios. Comprueba la conexión.");
   }
@@ -251,14 +253,78 @@ async function cargarSitios(pos){
 function pintarLista(){
   if(!centro){ estado("Pulsa 📍 para ver qué hay cerca de ti, o busca un destino."); return; }
   if(!sitios.length){ estado("No hay sitios con ficha en Wikipedia en esta zona. Prueba a buscar otro punto o mantén pulsado el mapa."); return; }
-  $contenido.innerHTML = `<div class="estado">${sitios.length} sitios en ${RADIO/1000} km · <span style="color:#c77d00">●</span> = ficha en inglés</div>` +
+  $contenido.innerHTML = `<div class="estado">${sitios.length} sitios en ${RADIO/1000} km · <span style="color:#c77d00">●</span> = ficha traducida automáticamente</div>` +
     sitios.map((s,i) => `
     <div class="sitio" data-i="${i}">
       ${s.foto ? `<img src="${esc(s.foto)}" alt="" loading="lazy">` : `<div class="sinfoto">🏛️</div>`}
-      <div><b>${esc(s.titulo)}${s.lang==="en" ? '<span class="etq">EN</span>' : ""}</b>
+      <div><b>${esc(s.titulo)}</b>
       <small>${fmtDist(s.km)}${s.desc ? " · " + esc(s.desc) : ""}</small></div>
     </div>`).join("");
   $contenido.querySelectorAll(".sitio").forEach(el => el.onclick = () => abrirFicha(+el.dataset.i));
+}
+
+/* ---------- castellano: versión española de Wikipedia y traducción automática ---------- */
+async function tituloEspanol(titulos){
+  const res = {};
+  for(let i = 0; i < titulos.length; i += 50){
+    const lote = titulos.slice(i, i+50);
+    const d = await getJSON(`https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&redirects=1&prop=langlinks&lllang=es&lllimit=max&titles=${encodeURIComponent(lote.join("|"))}`);
+    const mapa = {}; (d.query?.normalized || []).concat(d.query?.redirects || []).forEach(n => mapa[n.to] = n.from);
+    Object.values(d.query?.pages || {}).forEach(pg => {
+      const es = (pg.langlinks || [])[0]?.["*"];
+      if(es){ res[pg.title] = es; if(mapa[pg.title]) res[mapa[pg.title]] = es; }
+    });
+  }
+  return res;
+}
+/* sitios de la lista que solo estaban en inglés: si tienen artículo en español, se usa ese */
+async function aEspanol(lista){
+  const en = lista.filter(s => s.lang === "en");
+  if(!en.length) return;
+  try{
+    const es = await tituloEspanol(en.map(s => s.titulo));
+    en.forEach(s => { if(es[s.titulo]){ s.titulo = es[s.titulo]; s.lang = "es"; s.desc = ""; } });
+  }catch(_){}
+}
+function leerCacheTr(){ try{ return JSON.parse(localStorage.getItem("mgv_tr") || "{}"); }catch(_){ return {}; } }
+function guardarCacheTr(c){ try{ const k = Object.keys(c); if(k.length > 400) k.slice(0, k.length - 400).forEach(x => delete c[x]); localStorage.setItem("mgv_tr", JSON.stringify(c)); }catch(_){} }
+let cuotaAgotada = false;
+function trozos(texto, max){
+  const frases = texto.match(/[^.!?]+[.!?]*\s*/g) || [texto], out = [];
+  let act = "";
+  const bytes = s => new TextEncoder().encode(s).length;
+  frases.forEach(f => {
+    if(bytes(act + f) <= max) act += f;
+    else { if(act) out.push(act); while(bytes(f) > max){ let corte = f.slice(0, Math.floor(max/2)); out.push(corte); f = f.slice(corte.length); } act = f; }
+  });
+  if(act.trim()) out.push(act);
+  return out;
+}
+async function traducir(texto){
+  texto = String(texto || "").trim(); if(!texto) return "";
+  const cache = leerCacheTr();
+  if(cache[texto]) return cache[texto];
+  if(cuotaAgotada) throw {cuota:true};
+  const partes = [];
+  for(const t of trozos(texto, 450)){
+    const r = await fetch("https://api.mymemory.translated.net/get?langpair=en|es&q=" + encodeURIComponent(t.trim()));
+    const d = await r.json().catch(() => ({}));
+    const tr = d?.responseData?.translatedText || "";
+    if(d?.responseStatus == 429 || /MYMEMORY WARNING|QUOTA/i.test(tr)){ cuotaAgotada = true; throw {cuota:true}; }
+    if(d?.responseStatus != 200 || !tr) throw {cuota:false};
+    partes.push(tr.trim());
+  }
+  const res = partes.join(" ");
+  cache[texto] = res; guardarCacheTr(cache);
+  return res;
+}
+/* descripciones cortas en inglés de la lista: se traducen poco a poco (máx. 20 por zona) */
+async function traducirDescripciones(lista){
+  const pend = lista.filter(s => s.lang === "en" && s.desc && !s.descEs).slice(0, 20);
+  for(const s of pend){
+    try{ s.desc = await traducir(s.desc); s.descEs = true; }catch(e){ if(e && e.cuota) break; }
+    if(sitios === lista && pestana === "sitios" && vista === "lista") pintarLista();
+  }
 }
 
 /* ---------- ficha (resumen de Wikipedia) ---------- */
@@ -271,6 +337,7 @@ async function mostrarFicha(titulo, lang, base){
   vista = "ficha"; abrirPanel();
   if(pestana !== "sitios"){ pestana = "sitios"; document.querySelectorAll(".pestanas button").forEach(x => x.classList.toggle("activa", x.dataset.p === "sitios")); }
   estado("Cargando ficha…");
+  if(lang === "en"){ try{ const es = await tituloEspanol([titulo]); if(es[titulo]) return mostrarFicha(es[titulo], "es", base); }catch(_){} }
   try{
     let d = await getJSON(`https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(titulo.replace(/ /g,"_"))}`);
     // Si se pidió en español y existe versión en español, se usa; si no, se intenta en inglés.
@@ -282,7 +349,17 @@ async function mostrarFicha(titulo, lang, base){
       lat: d.coordinates?.lat ?? base?.lat, lon: d.coordinates?.lon ?? base?.lon,
       url: d.content_urls?.mobile?.page || `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(titulo)}`
     };
-    pintarFicha(fichaActual);
+    const f = fichaActual;
+    if(lang === "en"){ f.traduciendo = true; }
+    pintarFicha(f);
+    if(lang === "en"){
+      try{
+        const [t, dsc] = await Promise.all([traducir(f.texto), f.desc ? traducir(f.desc) : Promise.resolve("")]);
+        f.texto = t; f.desc = dsc; f.traducida = true;
+      }catch(e){ f.errorTraduccion = e && e.cuota ? "Se ha alcanzado el límite diario gratuito de traducción: se muestra en inglés. Mañana volverá a traducirse." : "No se pudo traducir ahora: se muestra en inglés."; }
+      f.traduciendo = false;
+      if(fichaActual === f && vista === "ficha") pintarFicha(f);
+    }
   }catch(err){
     if(lang === "es"){ return mostrarFicha(titulo, "en", base); }
     estado("No se pudo cargar la ficha de «" + titulo + "».");
@@ -296,17 +373,19 @@ function pintarFicha(f){
     <div class="ficha">
       <button class="volver" id="volver">‹ Volver a la lista</button>
       ${f.foto ? `<img class="foto" src="${esc(f.foto)}" alt="">` : ""}
-      <h2>${esc(f.titulo)}${f.lang==="en" ? '<span class="etq">EN</span>' : ""}</h2>
+      <h2>${esc(f.titulo)}</h2>
       ${f.desc ? `<div class="desc">${esc(f.desc)}</div>` : ""}
       <div class="acciones">
         <a class="primario" href="${llegar}" target="_blank" rel="noopener">🧭 Cómo llegar</a>
         <a class="secundario" href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(f.titulo)}" target="_blank" rel="noopener">🕒 Horarios y precios</a>
       </div>
+      ${f.traduciendo ? `<div class="estado">🌐 Traduciendo al castellano…</div>` : ""}
+      ${f.errorTraduccion ? `<div class="estado" style="background:#fff3d6;border-radius:10px;padding:8px">⚠️ ${esc(f.errorTraduccion)}</div>` : ""}
       <p>${esc(f.texto) || "Sin descripción disponible."}</p>
       <div class="acciones">
         <a class="secundario" href="${esc(f.url)}" target="_blank" rel="noopener">📖 Leer más en Wikipedia</a>
       </div>
-      <div class="nota">Texto e imagen: Wikipedia / Wikimedia Commons (CC BY-SA).${f.lang==="en" ? " Esta ficha solo existe en inglés." : ""}</div>
+      <div class="nota">Texto e imagen: Wikipedia / Wikimedia Commons (CC BY-SA).${f.lang==="en" ? (f.traducida ? " Traducción automática del inglés (MyMemory)." : " Esta ficha solo existe en inglés.") : ""}</div>
     </div>`;
   const vol = document.getElementById("volver");
   if(diaVista){ vol.textContent = "‹ Volver al día"; vol.onclick = () => { vista = "dia"; fichaActual = null; pintarDia(); }; }
